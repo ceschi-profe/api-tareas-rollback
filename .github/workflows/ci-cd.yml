@@ -120,3 +120,41 @@ jobs:
 
       - name: Smoke test
         run: bash scripts/smoke.sh http://localhost:8080
+
+  rollback:
+    name: Rollback automático en producción
+    needs: produccion
+    # Solo si falló producción. Si falló antes (por ejemplo staging), producción nunca cambió.
+    if: failure() && needs.produccion.result == 'failure'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Buscar el último SHA que pasó producción
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          SHA=$(gh run list --workflow ci-cd.yml --branch main --event push --status success \
+                --limit 1 --json headSha --jq '.[0].headSha')
+          [[ "$SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "No hay una versión buena anterior"; exit 1; }
+          echo "Se vuelve a $SHA"
+          echo "SHA=$SHA" >> "$GITHUB_ENV"
+          echo "IMAGEN=ghcr.io/${GITHUB_REPOSITORY,,}:$SHA" >> "$GITHUB_ENV"
+
+      - name: Iniciar sesión en GHCR
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: echo "$TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+
+      - name: Desplegar la versión anterior
+        run: docker run -d --name api -p 8080:8000 -e APP_ENV=produccion "$IMAGEN"
+
+      - name: Smoke test
+        run: |
+          bash scripts/smoke.sh http://localhost:8080
+          curl -fsS http://localhost:8080/version | grep -q "$SHA"
+          echo "OK producción volvió a $SHA"
