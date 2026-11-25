@@ -23,6 +23,8 @@ def create_app(config=None):
         cfg.ambiente,
         "si" if cfg.api_token else "no",
     )
+    if cfg.ambiente == "produccion" and not cfg.api_token:
+        raise RuntimeError("API_TOKEN es obligatorio en produccion")
 
     def autorizado():
         if not cfg.api_token:
